@@ -3,4 +3,8 @@ env/
 __pycache__/
 *.pyc
 .env
-memory/secrets.json
+.tgrep/
+jarvis_memory_db/
+data/secrets_vault.json
+user_profile.json
+*.save
