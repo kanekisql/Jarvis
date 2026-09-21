@@ -1,0 +1,6 @@
+class Jarvis:
+    def __init__(self):
+        ...
+
+    def process(self, message: str) -> str:
+        ...
