@@ -4,12 +4,15 @@ import traceback
 import random
 
 from core.intent_parser import IntentParser
+from core.planner import Planner
+from core.executor import ToolExecutor
+
 from infrastructure.llm_client import OllamaClient
 from infrastructure.api_client import LightweightAPIClient
 
 from memory.manager import MemoryManager
 
-from tools.code_search import CodeSearchTool
+from tools.registry import ToolRegistry
 from tools.time import TimeTool
 from tools.weather import WeatherTool
 from tools.currency import CurrencyTool
@@ -39,7 +42,6 @@ class JarvisRouter:
 
         self.memory_manager = MemoryManager()
 
-        self.code_search = CodeSearchTool()
         self.intent_parser = IntentParser()
 
         # Cliente HTTP compartido
@@ -52,6 +54,14 @@ class JarvisRouter:
         self.time_tool = TimeTool(api_client)
         self.weather_tool = WeatherTool(api_client)
         self.currency_tool = CurrencyTool(api_client)
+
+        # =====================================================
+        # PLANNER + REGISTRY + EXECUTOR
+        # =====================================================
+
+        self.tool_registry = ToolRegistry()
+        self.planner = Planner(self.tool_registry)
+        self.executor = ToolExecutor(self.tool_registry)
 
         # =====================================================
         # HISTORIAL
@@ -297,57 +307,7 @@ class JarvisRouter:
     # BÚSQUEDA DE CÓDIGO
     # ==========================================================
 
-    def _extract_search_term(
-        self,
-        text: str
-    ) -> str:
-
-        match = re.search(
-            r"busca\s+"
-            r"(?:(?:donde\s+esta|"
-            r"dónde\s+está|"
-            r"donde\s+se\s+usa|"
-            r"dónde\s+se\s+usa)\s+)?"
-            r"([a-zA-Z0-9_-]+)",
-            text,
-            re.IGNORECASE
-        )
-
-        if match:
-            return match.group(1).strip()
-
-        clean = re.sub(
-            r"""["'¿?¡!]""",
-            "",
-            text
-        ).strip()
-
-        stopwords = [
-            r"\bbusca\b",
-            r"\bdonde\b",
-            r"\bdónde\b",
-            r"\bse usa\b",
-            r"\bclase\b",
-            r"\bfuncion\b",
-            r"\bfunción\b",
-            r"\bcodigo\b",
-            r"\bcódigo\b"
-        ]
-
-        for word in stopwords:
-
-            clean = re.sub(
-                word,
-                "",
-                clean,
-                flags=re.IGNORECASE
-            )
-
-        return (
-            clean.strip().split()[-1]
-            if clean.strip()
-            else ""
-        )
+    
 
     # ==========================================================
     # DETECTOR DE HORA
@@ -413,37 +373,30 @@ class JarvisRouter:
         intent = datos["intent"]
 
         # ======================================================
-        # 2. HORA
+        # 2. PLANNER + EXECUTOR
         # ======================================================
 
-        if intent == "time":
+        if intent in [
+            "time",
+            "weather",
+            "currency"
+        ]:
 
-            return self.time_tool.execute(
-                datos["location"]
+            plan = self.planner.plan(
+                datos
             )
 
-        # ======================================================
-        # 3. CLIMA
-        # ======================================================
-
-        if intent == "weather":
-
-            return self.weather_tool.execute(
-                datos["location"]
+            result = self.executor.execute(
+                plan
             )
 
-        # ======================================================
-        # 4. MONEDAS
-        # ======================================================
+            if result["success"]:
+                return result["result"]
 
-        if intent == "currency":
-
-            return self.currency_tool.execute(
-                datos["amount"],
-                datos["from_currency"],
-                datos["to_currency"]
+            return (
+                result["error"]
+                or "No pude ejecutar la herramienta."
             )
-
 
 
 
@@ -508,57 +461,46 @@ class JarvisRouter:
                 clean_input,
                 input_lower
             )
-
         # ======================================================
         # 7. BÚSQUEDA DE CÓDIGO
         # ======================================================
 
-        code_keywords = [
-            "busca",
-            "donde esta",
-            "dónde está",
-            "se usa",
-            "donde se usa",
-            "dónde se usa"
-        ]
+        if intent == "code_search":
 
-        if any(
-            keyword in input_lower
-            for keyword in code_keywords
-        ):
-
-            search_target = self._extract_search_term(
-                clean_input
+            plan = self.planner.plan(
+                datos
             )
 
-            if (
-                search_target
-                and len(search_target) >= 2
-            ):
-
-                resultado_tgrep = (
-                    self.code_search.search_code(
-                        search_target
-                    )
-                )
-
-                prompt = (
-                    f"Resume brevemente el resultado "
-                    f"de código encontrado para "
-                    f"'{search_target}':\n"
-                    f"{resultado_tgrep}"
-                )
-
-                return self._get_llm_response(
-                    clean_input,
-                    prompt
-                )
-
-            return (
-                "Especifica qué término o función "
-                "deseas que busque en tu código."
+            result = self.executor.execute(
+                plan
             )
 
+            if not result["success"]:
+
+                return (
+                    result["error"]
+                    or "No pude realizar la búsqueda de código."
+                )
+
+            resultado_codigo = result["result"]
+
+            search_target = datos.get(
+                "query"
+            )
+
+            prompt = (
+                f"Resume brevemente el resultado "
+                f"de búsqueda de código para "
+                f"'{search_target}'.\n\n"
+                f"Resultado encontrado:\n"
+                f"{resultado_codigo}"
+            )
+
+            return self._get_llm_response(
+                clean_input,
+                prompt
+            )
+        
         # ======================================================
         # 8. SALUDO
         # ======================================================

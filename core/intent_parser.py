@@ -105,6 +105,21 @@ class IntentParser:
             "conversión",
         }
 
+        # ======================================================
+        # PALABRAS CLAVE: BÚSQUEDA DE CÓDIGO
+        # ======================================================
+
+        self.code_search_keywords = {
+            "busca",
+            "buscar",
+            "buscame",
+            "búscame",
+            "donde esta",
+            "dónde está",
+            "donde se usa",
+            "dónde se usa",
+        }
+
     # ==========================================================
     # NORMALIZACIÓN
     # ==========================================================
@@ -188,6 +203,11 @@ class IntentParser:
             normalized
         ):
             return "currency"
+        
+        if self._contains_code_search_intent(
+            normalized
+        ):
+            return "code_search"
 
         return "general"
 
@@ -251,6 +271,25 @@ class IntentParser:
                 return True
 
         return False
+
+    # ==========================================================
+    # DETECCIÓN DE BÚSQUEDA DE CÓDIGO
+    # ==========================================================
+
+    def _contains_code_search_intent(
+        self,
+        normalized: str
+    ) -> bool:
+
+        for keyword in self.code_search_keywords:
+
+            if re.search(
+                rf"\b{re.escape(keyword)}\b",
+                normalized
+            ):
+                return True
+
+        return False    
 
     # ==========================================================
     # EXTRACCIÓN DE UBICACIÓN
@@ -656,6 +695,103 @@ class IntentParser:
 
             return 1.0
 
+
+    # ==========================================================
+    # EXTRACCIÓN DE TÉRMINO DE BÚSQUEDA DE CÓDIGO
+    # ==========================================================
+
+    def extract_code_search_query(
+        self,
+        text: str
+    ) -> Optional[str]:
+        """
+        Extrae exactamente qué desea buscar
+        el usuario dentro del código.
+
+        Conserva mayúsculas y minúsculas de los
+        nombres del código.
+
+        Ejemplos:
+
+            "busca JarvisRouter"
+                -> "JarvisRouter"
+
+            "dónde está IntentParser"
+                -> "IntentParser"
+
+            "dónde se usa process_message"
+                -> "process_message"
+        """
+
+        normalized = self.normalize(
+            text
+        )
+
+        patterns = [
+
+            r"^busca\s+(.+)$",
+
+            r"^buscar\s+(.+)$",
+
+            r"^buscame\s+(.+)$",
+
+            r"^(?:donde|dónde)\s+esta\s+(.+)$",
+
+            r"^(?:donde|dónde)\s+se\s+usa\s+(.+)$",
+        ]
+
+        for pattern in patterns:
+
+            match = re.search(
+                pattern,
+                normalized,
+                re.IGNORECASE
+            )
+
+            if match:
+
+                normalized_query = (
+                    match.group(1).strip()
+                )
+
+                # Buscar el mismo fragmento dentro
+                # del texto original para conservar
+                # mayúsculas y minúsculas.
+                original_words = text.split()
+
+                query_words = (
+                    normalized_query.split()
+                )
+
+                for i in range(
+                    len(original_words) - len(query_words) + 1
+                ):
+
+                    candidate = " ".join(
+                        original_words[
+                            i:i + len(query_words)
+                        ]
+                    )
+
+                    if self.normalize(
+                        candidate
+                    ) == normalized_query:
+
+                        candidate = re.sub(
+                            r"[¿?!¡.,;:]+$",
+                            "",
+                            candidate
+                        ).strip()
+
+                        if candidate:
+                            return candidate
+
+                # Fallback
+                if normalized_query:
+                    return normalized_query
+
+        return None
+
     # ==========================================================
     # PARSER COMPLETO
     # ==========================================================
@@ -684,6 +820,8 @@ class IntentParser:
             "from_currency": None,
 
             "to_currency": None,
+
+            "query": None,
 
             "raw_text": text.strip(),
         }
@@ -718,5 +856,18 @@ class IntentParser:
             result.update(
                 currency_data
             )
+            
+        # ======================================================
+        # BÚSQUEDA DE CÓDIGO
+        # ======================================================
+
+        elif intent == "code_search":
+
+            result["query"] = (
+                self.extract_code_search_query(
+                    text
+                )
+            )
+
 
         return result
